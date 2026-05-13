@@ -1,15 +1,22 @@
-name: Classic Build (Hardcoded Mode)
+name: Unified Build (Manual Only)
 
 on:
   workflow_dispatch:
     inputs:
-      package_name:
-        description: "Package name of the target game/app"
+      branch_selector:
+        description: '选择要构建的分支 (1: Master, 2: Dev)'
         required: true
+        type: choice
+        options:
+          - '1 - Master (Hardcoded Mode)'
+          - '2 - Dev (Config File Mode)'
+      package_name:
+        description: '【仅 Master 模式有效】目标包名'
+        required: false
         type: string
-        default: "com.example.game"
+        default: 'com.example.game'
       skip_cache:
-        description: "Skip cache restoration (if experiencing cache errors)"
+        description: '跳过缓存修复'
         required: false
         default: false
         type: boolean
@@ -22,78 +29,75 @@ jobs:
     runs-on: ubuntu-latest
     environment: build
     steps:
-    - name: 📦 Checkout repository
+    # ⭐ 核心修改：根据输入 1 或 2，分别拉取 master 或 dev 分支的代码
+    - name: 📦 Checkout Master
+      if: startsWith(github.event.inputs.branch_selector, '1')
       uses: actions/checkout@v4.2.2
       with:
+        ref: master
         fetch-depth: 1
-    
+
+    - name: 📦 Checkout Dev
+      if: startsWith(github.event.inputs.branch_selector, '2')
+      uses: actions/checkout@v4.2.2
+      with:
+        ref: dev
+        fetch-depth: 1
+
     - name: ⚙️ Setup Android SDK
       uses: android-actions/setup-android@v4
       with:
         api-level: 34
         build-tools-version: 34.0.0
         ndk-version: 26.2.11394342
-    
+
     - name: ☕ Set up Java
       uses: actions/setup-java@v4.8.0
       with:
         distribution: temurin
         java-version: 11
         cache: ${{ !inputs.skip_cache && 'gradle' || '' }}
-    
+
     - name: 🛠️ Setup Gradle
       uses: gradle/actions/setup-gradle@v3
       with:
         gradle-version: 8.5
-    
-    - name: 🔧 Replace package name in source files
+
+    # === Master 模式专属：替换包名 ===
+    - name: 🔧 Replace package name in source files (Master Mode)
+      if: startsWith(github.event.inputs.branch_selector, '1')
       run: |
-        echo "📝 Replacing hardcoded package name with: ${{ github.event.inputs.package_name }}"
-        echo "📍 Original value: com.game.packagename"
+        PACKAGE=${{ github.event.inputs.package_name }}
+        echo "📝 正在将包名替换为: $PACKAGE"
         
-        # Update module description in module.gradle
+        # 修改 module.gradle
         if grep -q 'moduleDescription = "' module.gradle; then
-          sed -i 's/moduleDescription = "/moduleDescription = "(${{ github.event.inputs.package_name }}) /g' module.gradle
+          sed -i 's/moduleDescription = "/moduleDescription = "('$PACKAGE') /g' module.gradle
           echo "✅ Updated module.gradle"
-          echo "   New module description: (${{ github.event.inputs.package_name }}) Zygisk-Il2CppDumper"
-        else
-          echo "⚠️  moduleDescription not found in module.gradle"
         fi
         
-        # Update package name in game.h
+        # 修改 game.h
         if grep -q 'com.game.packagename' module/src/main/cpp/game.h; then
-          sed -i "s/com.game.packagename/${{ github.event.inputs.package_name }}/g" module/src/main/cpp/game.h
+          sed -i "s/com.game.packagename/$PACKAGE/g" module/src/main/cpp/game.h
           echo "✅ Updated game.h"
-          echo "   New package name: ${{ github.event.inputs.package_name }}"
-        else
-          echo "⚠️  com.game.packagename not found in game.h"
-          echo "📄 Current game.h content:"
-          cat module/src/main/cpp/game.h
         fi
-        
-        echo "📋 Verification:"
-        echo "module.gradle line with description:"
-        grep 'moduleDescription = "' module.gradle || echo "Not found"
-        echo "game.h content:"
-        cat module/src/main/cpp/game.h
-    
-    - name: 🏗️ Build Magisk module
+
+    - name: 🏗️ Build module
       run: |
         chmod +x ./gradlew
-        echo "🚀 Building Zygisk-Il2CppDumper for package: ${{ github.event.inputs.package_name }}"
-        echo "📖 Note: This build uses HARDCODED mode (single package)"
-        echo "       For multi-package support, use dev branch with config file mode"
+        if startsWith('${{ github.event.inputs.branch_selector }}', '1'); then
+          echo "🚀 正在构建 Master 分支 (硬编码模式) -> 目标: ${{ github.event.inputs.package_name }}"
+        else
+          echo "🚀 正在构建 Dev 分支 (配置文件模式) -> 需要手机端 /data/adb/target_packages.txt"
+        fi
         ./gradlew :module:assembleRelease --stacktrace --no-daemon
-        echo "🎉 Build completed successfully!"
-    
+        echo "🎉 构建完成!"
+
     - name: 📊 List build outputs
       run: |
-        echo "📁 Build output directory structure:"
-        ls -la out/ || echo "out/ directory not found"
-        echo ""
-        echo "📦 Generated artifacts:"
+        echo "📁 Build output:"
         find out/ -type f -name "*.zip" -o -name "*.apk" 2>/dev/null || echo "No output files found"
-    
+
     - name: 📝 Generate build information
       run: |
         echo "🔄 Zygisk-Il2CppDumper Build Summary" > build-info.txt
@@ -101,8 +105,15 @@ jobs:
         echo "" >> build-info.txt
         echo "📦 Build Details:" >> build-info.txt
         echo "-----------------" >> build-info.txt
-        echo "Target Package: ${{ github.event.inputs.package_name }}" >> build-info.txt
-        echo "Build Mode: Hardcoded (Single Package)" >> build-info.txt
+        
+        if startsWith('${{ github.event.inputs.branch_selector }}', '1'); then
+          echo "Branch: Master (Hardcoded Mode)" >> build-info.txt
+          echo "Target Package: ${{ github.event.inputs.package_name }}" >> build-info.txt
+        else
+          echo "Branch: Dev (Config File Mode)" >> build-info.txt
+          echo "Target Package: User defined (via /data/adb/target_packages.txt)" >> build-info.txt
+        fi
+        
         echo "Build Date: $(date)" >> build-info.txt
         echo "Commit: ${{ github.sha }}" >> build-info.txt
         echo "Workflow: ${{ github.workflow }}" >> build-info.txt
@@ -114,34 +125,13 @@ jobs:
         echo "NDK: 26.2.11394342" >> build-info.txt
         echo "Java: 11 (Temurin)" >> build-info.txt
         echo "Gradle: 8.5" >> build-info.txt
-        echo "" >> build-info.txt
-        echo "🚀 Usage Instructions:" >> build-info.txt
-        echo "----------------------" >> build-info.txt
-        echo "1. Install the generated module in Magisk" >> build-info.txt
-        echo "2. Module is configured for: ${{ github.event.inputs.package_name }}" >> build-info.txt
-        echo "3. Start the target app to generate dump.cs" >> build-info.txt
-        echo "4. Output location: /data/data/${{ github.event.inputs.package_name }}/files/dump.cs" >> build-info.txt
-        echo "" >> build-info.txt
-        echo "📋 GitHub Actions Details:" >> build-info.txt
-        echo "-------------------------" >> build-info.txt
-        echo "Run ID: ${{ github.run_id }}" >> build-info.txt
-        echo "Run Number: ${{ github.run_number }}" >> build-info.txt
-        echo "Triggered by: ${{ github.event_name }}" >> build-info.txt
-        echo "Manual Input: ${{ github.event.inputs.package_name }}" >> build-info.txt
-    
+
     - name: 📤 Upload build artifacts
       uses: actions/upload-artifact@v4.6.0
       with:
-        name: zygisk-il2cppdumper-${{ github.event.inputs.package_name }}
+        name: zygisk-il2cppdumper-${{ startsWith(github.event.inputs.branch_selector, '1') && 'master' || 'dev' }}-${{ github.sha }}
         path: |
           out/magisk_module_release/
           build-info.txt
         if-no-files-found: error
         retention-days: 7
-    
-    - name: 📄 Upload build info separately
-      uses: actions/upload-artifact@v4.6.0
-      with:
-        name: build-info-${{ github.event.inputs.package_name }}
-        path: build-info.txt
-        retention-days: 30
