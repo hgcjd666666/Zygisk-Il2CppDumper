@@ -9,7 +9,7 @@ on:
         type: string
         default: "com.example.game"
       skip_cache:
-        description: "Skip cache restoration (if experiencing cache errors)"
+        description: "是否跳过缓存"
         required: false
         default: false
         type: boolean
